@@ -42,7 +42,6 @@ from netket.vqs.mc import (
     check_hilbert,
 )
 from netket.vqs.mc.mc_state.state import (
-    check_chunk_size,
     compute_chain_length,
     _is_power_of_two,
     jit_evaluate,
@@ -343,7 +342,6 @@ class FoundationalQuantumState(VariationalState):
             raise ValueError(f"Invalid chain length: chain_length={chain_length}")
 
         n_samples = chain_length * self.sampler.n_chains
-        check_chunk_size(n_samples, self.chunk_size)
 
         self._chain_length = chain_length
         self.reset()
@@ -417,8 +415,6 @@ class FoundationalQuantumState(VariationalState):
                 stacklevel=2,
             )
 
-        check_chunk_size(self.n_samples, chunk_size)
-
         self._chunk_size = chunk_size
 
     def reset(self):
@@ -455,9 +451,6 @@ class FoundationalQuantumState(VariationalState):
                 raise ValueError("Cannot specify both `chain_length` and `n_samples`.")
             elif chain_length is None:
                 chain_length = compute_chain_length(self.sampler.n_chains, n_samples)
-
-            if self.chunk_size is not None:
-                check_chunk_size(chain_length * self.sampler.n_chains, self.chunk_size)
 
         if n_discard_per_chain is None:
             n_discard_per_chain = self.n_discard_per_chain

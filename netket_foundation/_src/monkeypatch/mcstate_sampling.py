@@ -13,7 +13,6 @@ from netket.sampler import SamplerState
 from netket.vqs.mc.mc_state.state import (
     MCState,
     compute_chain_length,
-    check_chunk_size,
 )
 
 from netket.vqs.mc.mc_state.state import *  # noqa: F403
@@ -242,8 +241,6 @@ def sample_distribution(
     else:
         if chain_length is None:
             chain_length = compute_chain_length(self.sampler.n_chains, n_samples)
-        if self.chunk_size is not None:
-            check_chunk_size(chain_length * self.sampler.n_chains, self.chunk_size)
 
     if n_discard_per_chain is None:
         n_discard_per_chain = self.n_discard_per_chain
