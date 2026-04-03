@@ -34,6 +34,13 @@ dev = [
     "pytest-cov>=6.0",
     "pre-commit>=4.0",
 ]
+docs = [
+    "sphinx-autobuild>=2024.0",
+    "sphinx-book-theme>=1.2.0",
+    "sphinx-design>=0.7.0",
+    "myst-nb>=1.0.0",
+    "neuralqxlab-sphinx-theme",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -78,3 +85,6 @@ tag_name = "v{new_version}"
 filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
+
+[tool.uv.sources]
+neuralqxlab-sphinx-theme = { git = "https://github.com/NeuralQXLab/neuralqxlab-sphinx-theme" }
