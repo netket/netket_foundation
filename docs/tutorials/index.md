@@ -33,6 +33,13 @@ Using importance sampling to improve training efficiency.
 How to handle datasets and checkpoints when working with FNQS.
 :::
 
+:::{grid-item-card} 5. Hubbard model with FNQS
+:link: 5.%20Hubbard%20model%20with%20FNQS.html
+:link-type: url
+
+Training a fermionic foundation NQS on the 1D Hubbard chain across the full U/t range.
+:::
+
 ::::
 
 ```{toctree}
@@ -43,4 +50,5 @@ How to handle datasets and checkpoints when working with FNQS.
 2. FNQS with disorder
 3. Importance Sampling
 4. Managing data with FNQS
+5. Hubbard model with FNQS
 ```
