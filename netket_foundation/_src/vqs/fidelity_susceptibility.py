@@ -1,92 +1,180 @@
-from flax import core as fcore
+"""
+Fidelity susceptibility chi_ij = Re Cov[d_i log psi, d_j log psi].
+
+The core object is SusceptibilityObservable, which plugs into the standard
+netket LocalEstimator interface:
+
+    obs = SusceptibilityObservable(vstate.hilbert)
+    vstate.expect(obs)                             # StatsBatch
+    vstate.expect_to_precision(obs, atol=1e-3)     # OnlineStatsBatch accumulator
+
+It is also dispatched on by ISState.expect() for importance-sampled estimates.
+"""
+
+from __future__ import annotations
+
+from functools import partial
+
 import jax
-import netket as nk
 import jax.numpy as jnp
 
+from netket.jax import HashablePartial
+from netket.operator._abstract_observable import AbstractObservable
+from netket.stats import LocalEstimatorsBatch
+from netket.vqs import (
+    MCState,
+    expect as nk_expect,
+    local_estimators as nk_local_estimators,
+)
 
-def susceptibility_stats(dparams_logpsi):
-    """
-    Compute the mean and variance of the fidelity susceptibility matrix from parameter derivatives.
+from netket_foundation._src.jax import foundational_log_jacobian
+from netket_foundation._src.expectation_value.importance_sampling import ISMatrixResult
+from netket_foundation._src.expectation_value.is_state import ISState
+
+
+class SusceptibilityObservable(AbstractObservable):
+    """Observable for the fidelity susceptibility matrix.
+
+    Registers with NetKet's LocalEstimator dispatch so that
+    ``vstate.expect(obs)`` and ``vstate.expect_to_precision(obs, ...)``
+    work out of the box.
 
     Args:
-        dparams_logpsi: Array of shape (n_samples, n_params) containing the derivatives
-                        of log(ψ) with respect to each parameter for each sample.
-
-    Returns:
-        tuple: (chi_mean, chi_var) where:
-            - chi_mean: The mean susceptibility matrix of shape (n_params, n_params),
-                        computed as the covariance of centered derivatives.
-            - chi_var: The unbiased variance of the sample mean, shape (n_params, n_params).
+        hilbert: Hilbert space of the variational state (``vstate.hilbert``).
     """
-    n_samples, _ = dparams_logpsi.shape
 
-    # Center the derivatives
-    centered = dparams_logpsi - jnp.mean(
-        dparams_logpsi, axis=0, keepdims=True
-    )  # (n_samples, n_params)
-    # Compute per-sample covariance tensors (vectorized outer products)
-    chi_samples = (
-        centered[:, :, None] * centered[:, None, :]
-    )  # (n_samples, n_params, n_params)
-    # Compute the mean susceptibility matrix
-    chi_mean = jnp.mean(chi_samples, axis=0)  # (n_params, n_params)
-    # Unbiased variance of the sample mean:
-    # Var[mean] = sum((x - mean)^2) / (n * (n - 1))
-    chi_var = jnp.sum((chi_samples - chi_mean[None, :, :]) ** 2, axis=0) / (
-        n_samples * (n_samples - 1)
+
+# ---------------------------------------------------------------------------
+# Dispatches
+# ---------------------------------------------------------------------------
+
+
+@nk_expect.dispatch
+def _susceptibility_expect(
+    vstate: MCState,
+    observable: SusceptibilityObservable,
+    chunk_size: int | None,
+):
+    return vstate.local_estimators(observable, chunk_size=chunk_size).to_stats()
+
+
+@nk_local_estimators.dispatch
+def _susceptibility_local_estimators(
+    vstate: MCState,
+    observable: SusceptibilityObservable,
+    chunk_size: int | None,
+) -> LocalEstimatorsBatch:
+    variables = vstate.variables
+
+    if "foundational" not in variables:
+        raise ValueError(
+            "SusceptibilityObservable requires the variational state to expose a "
+            "'foundational' collection in its variables (the parameters w.r.t. which "
+            "the fidelity susceptibility is computed), but the variables only contain "
+            f"the collections {tuple(variables.keys())}."
+        )
+
+    sigma = vstate.samples
+    n_chains = sigma.shape[0]
+    if sigma.ndim >= 3:
+        sigma = jax.lax.collapse(sigma, 0, 2)
+
+    dlog = foundational_log_jacobian(vstate.model.apply, variables, sigma, chunk_size)
+    n_params = dlog.shape[-1]
+    channels = jnp.concatenate(
+        [
+            dlog,
+            (jnp.conj(dlog[:, :, None]) * dlog[:, None, :]).reshape(dlog.shape[0], -1),
+        ],
+        axis=-1,
+    )
+    return LocalEstimatorsBatch(
+        data=channels.reshape(n_chains, -1, n_params + n_params * n_params),
+        combinator=HashablePartial(_combine, n_params),
     )
 
-    return chi_mean, chi_var
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
 
 
-def susceptibility(vs):
-    """
-    Compute the fidelity susceptibility matrix for a variational state.
+def _combine(n_params: int, mu):
+    mean_dlog = mu[:n_params]
+    mean_outer = mu[n_params:].reshape(n_params, n_params)
+    qgt = mean_outer - jnp.conj(mean_dlog)[:, None] * mean_dlog[None, :]
+    return jnp.real(qgt)
 
-    The fidelity susceptibility is defined as:
-        χ_ij = <∂_i(logψ) ∂_j(logψ)> - <∂_i(logψ)><∂_j(logψ)>
-    where ∂_i denotes the derivative with respect to the i-th foundational parameter.
 
-    This quantity measures how sensitive the quantum state is to changes in the
-    foundational parameters and is related to the quantum geometric tensor.
+# ---------------------------------------------------------------------------
+# IS overload — registers with ISState.expect dispatch
+# ---------------------------------------------------------------------------
+
+
+@nk_expect.dispatch
+def expect_isstate_susceptibility(
+    is_state: ISState,
+    observable: SusceptibilityObservable,
+    chunk_size: int | None,
+) -> ISMatrixResult:
+    if "foundational" not in is_state.variables:
+        raise ValueError(
+            "SusceptibilityObservable requires the target state to expose a "
+            "'foundational' collection in its variables (the parameters w.r.t. which "
+            "the fidelity susceptibility is computed), but the variables only contain "
+            f"the collections {tuple(is_state.variables.keys())}."
+        )
+
+    return _is_susceptibility_result(
+        is_state.apply_fn,
+        is_state.variables,
+        is_state.samples,
+        is_state.normalized_weights,  # (n_samples,) — cached
+        is_state.ess,
+        is_state.ess_fraction,
+        chunk_size or is_state._chunk_size,
+    )
+
+
+@partial(jax.jit, static_argnames=("apply_fn", "chunk_size"))
+def _is_susceptibility_result(
+    apply_fn, target_variables, samples, w, ess, ess_fraction, chunk_size
+) -> ISMatrixResult:
+    """IS-weighted fidelity-susceptibility estimate, packaged as ISMatrixResult.
 
     Args:
-        vs: A NetKet variational state object
-
-    Returns:
-        dict: A dictionary with keys:
-            - "Mean": The mean susceptibility matrix of shape (n_params, n_params)
-            - "Variance": The variance of the susceptibility estimate
+        apply_fn:         Target model apply function.
+        target_variables: Variables for the target state.
+        samples:          Reference samples, shape (n_samples, N).
+        w:                Normalized IS weights, shape (n_samples,).
+        ess:              Effective sample size.
+        ess_fraction:     ESS as a fraction of n_samples.
+        chunk_size:       Optional chunk size for the Jacobian evaluation.
     """
-    # Extract model and variables
-    model = vs.model
-    vars_no_h, h_dict = fcore.pop(vs.variables, "foundational")
+    dlog = foundational_log_jacobian(
+        apply_fn, target_variables, samples, chunk_size
+    )  # (n_samples, n_params)
 
-    # Flatten samples
-    samples_flat = vs.samples.reshape(-1, vs.hilbert.size)
+    n = dlog.shape[0]
+    mu = jnp.einsum("i,ij->j", w, dlog)
+    d = dlog - mu[None, :]
 
-    # Define logψ function
-    def logpsi(h, vars_no_h, x):
-        variables_with_h = fcore.copy(vars_no_h, {"foundational": h})
-        return model.apply(variables_with_h, x)
+    # chi_ij is the real part of the Hermitian IS-weighted covariance.
+    chi_local = jnp.conj(d[:, :, None]) * d[:, None, :]
+    chi_mean = jnp.real(jnp.einsum("i,ijk->jk", w, chi_local))
 
-    # Compute jacobian wrt foundational parameters
-    if vs.chunk_size is None:
-        df = jax.jacfwd(logpsi, argnums=0)(h_dict, vars_no_h, samples_flat)
-    else:
-        # Chunked version to save memory
-        def jac_block(h, vars_no_h, x_chunk):
-            return jax.jacfwd(logpsi, argnums=0)(h, vars_no_h, x_chunk)
+    # Standard error of the self-normalized IS estimator via the delta method,
+    # sqrt(sum_i w_i^2 (chi_local_i - chi_mean)^2), applied element-wise — same
+    # estimator as the scalar ISResult path. Exact (asymptotically) for
+    # arbitrary weights and reduces to the plain MC error sqrt(var/n) when the
+    # weights are uniform (w_i = 1/n, ESS == n).
+    sq_dev = jnp.abs(chi_local - chi_mean[None]) ** 2
+    error_of_mean = jnp.sqrt(jnp.einsum("i,ijk->jk", w**2, sq_dev))
 
-        jac_block_chunked = nk.jax.apply_chunked(
-            jac_block, in_axes=(None, None, 0), chunk_size=vs.chunk_size
-        )
-        jac_block_chunked = jax.jit(jac_block_chunked)
-        df = jac_block_chunked(h_dict, vars_no_h, samples_flat)
-
-    # Focus on 'parameters'
-    dpararams_logpsi = df["parameters"]  # shape (n_samples, n_params)
-    chi_Mean, chi_Variance = susceptibility_stats(dpararams_logpsi)
-    chi_stat = {"Mean": chi_Mean, "Variance": chi_Variance}
-
-    return chi_stat
+    return ISMatrixResult(
+        mean=chi_mean,
+        error_of_mean=error_of_mean,
+        ess=ess,
+        ess_fraction=ess_fraction,
+        n_samples=n,
+    )

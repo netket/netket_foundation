@@ -15,10 +15,10 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "netket>=3.22.0.dev3",
-    "nqxpack",
-    "matplotlib",
+    "nqxpack>=0.1.13",
     "pandas>=3.0.2",
+    "netket",
+    "matplotlib",
 ]
 
 # [project.urls]
@@ -35,6 +35,8 @@ dev = [
     "pytest-cov>=6.0",
     "pre-commit>=4.0",
     "ipywidgets>=7.0",
+    "ipykernel>=7.2.0",
+    "nbconvert>=7.17.1",
 ]
 docs = [
     "sphinx-autobuild>=2024.0",
@@ -51,10 +53,10 @@ pythonpath = ["tests"]
 [tool.ruff]
 target-version = "py311"
 line-length = 88
+# Lint everything except examples (which are only formatted, not linted)
+extend-exclude = ["examples"]
 
 [tool.ruff.lint]
-# Lint everything except examples (which are only formatted, not linted)
-exclude = ["examples"]
 select = ["E", "F", "W", "UP"]
 fixable = ["ALL"]
 ignore = [
@@ -64,7 +66,6 @@ ignore = [
     "E741",   # ambiguous variable names (common in physics: l, O, I)
     "UP007",  # Optional[X] -> X | None  (too pervasive, style choice)
     "UP035",  # deprecated typing imports
-    "UP038",  # isinstance union syntax
     "UP045",  # Optional[X] -> X | None  (same as UP007 for newer ruff)
 ]
 
@@ -90,3 +91,4 @@ replace = 'version = "{new_version}"'
 
 [tool.uv.sources]
 neuralqxlab-sphinx-theme = { git = "https://github.com/NeuralQXLab/neuralqxlab-sphinx-theme" }
+netket = { git = "https://github.com/netket/netket", rev = "3be17e0" }

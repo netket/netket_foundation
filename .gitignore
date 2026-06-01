@@ -210,3 +210,7 @@ __marimo__/
 *.pdf
 *.mpack
 *.nk
+*.npz
+
+# uv lockfile
+uv.lock

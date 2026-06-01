@@ -102,3 +102,5 @@ See complete scripts in:
 
 - `examples/ising1d.py`: foundational training on the Ising chain.
 - `examples/ising1d_uniform.py`: foundational training on the disordered Ising chain.
+- `examples/susceptibility.py`: full fidelity-susceptibility workflow, including IS.
+- `examples/susceptibility_to_precision.py`: minimal example for adaptive susceptibility estimation.

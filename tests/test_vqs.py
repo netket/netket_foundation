@@ -2,10 +2,13 @@
 
 import pytest
 import numpy as np
+import jax
 import jax.numpy as jnp
 import netket as nk
 import netket_foundation as nkf
-from netket.stats import Stats
+from netket.stats import Stats, LocalEstimators, LocalEstimatorsBatch
+from netket_foundation._src.jax import foundational_log_jacobian
+from netket_foundation._src.vqs.fidelity_susceptibility import _combine
 from helpers import (
     make_hilbert,
     make_parameter_space,
@@ -96,11 +99,124 @@ def test_expect_parametrized_operator(vstate, ham):
         assert np.isfinite(float(stats.mean.real))
 
 
+def test_local_estimators_returns_container(vstate, ham):
+    le = vstate.local_estimators(ham)
+    assert isinstance(le, LocalEstimators)
+    assert le.data.shape == vstate.samples.shape[:-1]
+
+
 def test_get_state_returns_mcstate(vstate):
     """get_state extracts a single-parameter MCState."""
     params = vstate.parameter_array[0]
     sub = vstate.get_state(params)
     assert sub.hilbert == vstate.hilbert_physical
+
+
+def test_is_state_expect_parametrized_operator(vstate, ham, create_ising):
+    """ISState evaluates ParametrizedOperator at the target parameters."""
+    ref_params = vstate.parameter_array[0]
+    target_params = vstate.parameter_array[1]
+    mc = vstate.get_state(ref_params, seed=123)
+    mc.sample()
+
+    is_state = nkf.expectation_value.ISState.from_mc_state(mc, target_params)
+
+    result_parametrized = is_state.expect(ham)
+    result_physical = is_state.expect(create_ising(target_params))
+
+    assert isinstance(result_parametrized, nkf.expectation_value.ISResult)
+    np.testing.assert_allclose(result_parametrized.mean, result_physical.mean)
+    np.testing.assert_allclose(
+        result_parametrized.error_of_mean, result_physical.error_of_mean
+    )
+
+
+def test_is_state_expect_parametrized_operator_requires_single_target(vstate, ham):
+    params = vstate.parameter_array[0]
+    mc = vstate.get_state(params, seed=123)
+    mc.sample()
+
+    is_state = nkf.expectation_value.ISState.from_mc_state(
+        mc, vstate.parameter_array[:2]
+    )
+
+    with pytest.raises(ValueError, match="single target parameter vector"):
+        is_state.expect(ham)
+
+
+def test_susceptibility_returns_matrix_stats(vstate):
+    params = vstate.parameter_array[0]
+    mc = vstate.get_state(params, seed=123)
+    mc.sample()
+    chi = mc.expect(nkf.observable.SusceptibilityObservable(mc.hilbert))
+
+    samples = mc.samples
+    if samples.ndim >= 3:
+        samples = jax.lax.collapse(samples, 0, 2)
+    dlog = foundational_log_jacobian(
+        mc.model.apply, mc.variables, samples, mc.chunk_size
+    )
+    centered = dlog - jnp.mean(dlog, axis=0, keepdims=True)
+    chi_ref = jnp.real(
+        jnp.mean(jnp.conj(centered[:, :, None]) * centered[:, None, :], axis=0)
+    )
+
+    assert chi.mean.shape == (params.size, params.size)
+    assert np.isfinite(float(chi.mean[0, 0].real))
+    assert np.isfinite(float(chi.error_of_mean[0, 0]))
+    np.testing.assert_allclose(chi.mean, chi_ref)
+
+
+def test_susceptibility_complex_qgt_is_real_hermitian_covariance():
+    """Complex log-derivatives need the Hermitian covariance convention."""
+    dlog = jnp.asarray(
+        [
+            [1.0 + 2.0j, 0.5 - 1.0j],
+            [-2.0 + 0.25j, 1.5 + 0.5j],
+            [0.25 - 0.75j, -1.0 + 2.0j],
+        ]
+    )
+    mean_dlog = jnp.mean(dlog, axis=0)
+    mean_outer = jnp.mean(jnp.conj(dlog[:, :, None]) * dlog[:, None, :], axis=0)
+    channels_mean = jnp.concatenate([mean_dlog, mean_outer.reshape(-1)])
+
+    expected_qgt = mean_outer - jnp.conj(mean_dlog)[:, None] * mean_dlog[None, :]
+    chi = _combine(dlog.shape[-1], channels_mean)
+
+    np.testing.assert_allclose(chi, jnp.real(expected_qgt), atol=1e-7)
+    np.testing.assert_allclose(chi, chi.T, atol=1e-7)
+
+    wrong_without_conjugation = jnp.mean(
+        (dlog - mean_dlog)[..., :, None] * (dlog - mean_dlog)[..., None, :],
+        axis=0,
+    )
+    assert not np.allclose(np.asarray(chi), np.asarray(wrong_without_conjugation))
+
+
+def test_susceptibility_observable_local_estimators(vstate):
+    params = vstate.parameter_array[0]
+    mc = vstate.get_state(params, seed=123)
+    mc.sample()
+
+    obs = nkf.observable.SusceptibilityObservable(mc.hilbert)
+    le = mc.local_estimators(obs)
+    assert isinstance(le, LocalEstimatorsBatch)
+    assert le.to_stats().mean.shape == (params.size, params.size)
+
+
+def test_susceptibility_to_precision_runs(vstate):
+    params = vstate.parameter_array[0]
+    mc = vstate.get_state(params, seed=123)
+    obs = nkf.observable.SusceptibilityObservable(mc.hilbert)
+    chi = mc.expect_to_precision(
+        obs,
+        atol=0.2,
+        max_iter=3,
+        max_lag=8,
+        verbose=True,
+    ).get_stats()
+    assert chi.mean.shape == (params.size, params.size)
+    assert np.isfinite(float(chi.error_of_mean[0, 0]))
 
 
 def test_unsupported_sampler_raises():

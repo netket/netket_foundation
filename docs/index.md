@@ -14,9 +14,9 @@ myst:
 :primary-button: Get started | getting_started.html
 :secondary-button: API reference | api/index.html
 
-A JAX library for training and evaluating *foundation neural quantum states*
+A NetKet extension for training and evaluating *foundation neural quantum states*
 over families of Hamiltonians. Optimize a single model across many parameter
-points — then transfer zero-shot across an entire quantum phase diagram.
+points, then probe it across an entire quantum phase diagram.
 :::
 
 ::::{grid} 3

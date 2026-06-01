@@ -11,7 +11,6 @@ from nqxpack._src.contextmgr import current_context
 
 # mcstate
 from netket import config
-from netket.vqs import MCState
 from netket.utils import _serialization as serialization_utils
 
 from jax.sharding import NamedSharding, PartitionSpec as P
@@ -121,7 +120,7 @@ def _unpack_variables(state_dict, obj):
 
 
 def serialize_fqs(
-    state: MCState,
+    state: FoundationalQuantumState,
 ) -> dict:
     asset_manager = current_context().asset_manager
 
@@ -142,7 +141,7 @@ def serialize_fqs(
 
 def deserialize_fqs(
     obj,
-) -> MCState:
+) -> FoundationalQuantumState:
     asset_manager = current_context().asset_manager
 
     state_dict = asset_manager.read_msgpack("state.msgpack")
@@ -150,7 +149,6 @@ def deserialize_fqs(
     variables = _unpack_variables(state_dict, obj)  # noqa: F841
     state = FoundationalQuantumState(**obj)  # , variables=variables)
     state = serialization.from_state_dict(state, state_dict)
-
     return state
 
 

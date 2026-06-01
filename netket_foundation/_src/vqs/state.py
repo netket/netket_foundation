@@ -1,4 +1,5 @@
 from typing import Any
+import os
 import warnings
 from functools import partial
 from collections.abc import Callable
@@ -21,7 +22,7 @@ from netket.sampler import (
     rules,
     ParallelTemperingSampler,
 )
-from netket.stats import Stats, statistics
+from netket.stats import Stats, statistics, LocalEstimators
 from netket.hilbert import AbstractHilbert
 from netket.vqs import (
     VariationalState,
@@ -29,6 +30,7 @@ from netket.vqs import (
     expect,
     get_local_kernel,
     get_local_kernel_arguments,
+    local_estimators as nk_local_estimators,
 )
 from netket.utils import dispatch
 from netket.utils.types import PyTree, SeedT
@@ -56,25 +58,6 @@ from netket_foundation._src.operator.parametrized import (
 from jax.sharding import NamedSharding, PartitionSpec as P
 from netket_foundation._src.hilbert.parameter_space import ParameterSpace
 from netket_foundation._src.nn.instance_wrapper import FoundationalInstance
-from netket_foundation._src.vqs.fidelity_susceptibility import susceptibility
-
-# def wrap_sampler(sampler, parameter_space, joint_space):
-#     if not isinstance(sampler, MetropolisSampler):
-#         raise NotImplementedError()
-
-#     joint_rule = rules.TensorRule(joint_space, rules=(sampler.rule, rules.FixedRule()))
-
-#     return MetropolisSampler(
-#         joint_space,
-#         joint_rule,
-#         sweep_size=sampler.sweep_size,
-#         reset_chains=sampler.reset_chains,
-#         n_chains=sampler.n_chains,
-#         chunk_size=sampler.chunk_size,
-#         machine_pow=sampler.machine_pow,
-#         # TODO change
-#         dtype=float,  # sampler.dtype,
-#     )
 
 
 def wrap_sampler(sampler, parameter_space, joint_space):
@@ -159,7 +142,7 @@ class FoundationalQuantumState(VariationalState):
         hilbert_physical = sampler.hilbert
         joint_space = hilbert_physical * parameter_space
 
-        if not isinstance(sampler, (MetropolisSampler, ParallelTemperingSampler)):
+        if not isinstance(sampler, MetropolisSampler | ParallelTemperingSampler):
             raise NotImplementedError(
                 f"Sampler of type {type(sampler)} is not supported. Only MetropolisSampler and ParallelTemperingSampler are supported."
             )
@@ -519,31 +502,11 @@ class FoundationalQuantumState(VariationalState):
         return jit_evaluate(self._apply_fun, self.variables, σ)
 
     @timing.timed
-    def local_estimators(
-        self, op: ParametrizedOperator, *, chunk_size: int | None = None
-    ) -> jax.Array:
+    def local_estimators(self, op, *, chunk_size: int | None = None) -> LocalEstimators:
         if chunk_size is None:
             chunk_size = self.chunk_size
 
-        σ, extra_args = get_local_kernel_arguments(self, op)
-
-        shape = σ.shape
-        if jnp.ndim(σ) != 2:
-            σ = σ.reshape((-1, shape[-1]))
-
-        if chunk_size is None:
-            return jax.jit(foundational_kernel_jax, static_argnames=("logpsi",))(
-                self._apply_fun, self.variables, σ, extra_args
-            ).reshape(shape[:-1])
-        else:
-            return jax.jit(
-                foundational_kernel_jax_chunked,
-                static_argnames=("logpsi", "chunk_size"),
-            )(
-                self._apply_fun, self.variables, σ, extra_args, chunk_size=chunk_size
-            ).reshape(
-                shape[:-1]
-            )
+        return nk_local_estimators(self, op, chunk_size)
 
     @property
     def parameter_array(self) -> jax.Array:
@@ -611,8 +574,27 @@ class FoundationalQuantumState(VariationalState):
         )
         return vstate
 
-    def save(self, fileobj):  # noqa: F811
-        _save({"state": self}, fileobj)
+    def replace_sampler_seed(self, seed: SeedT | None = None):
+        """Change the rng state of the sampler contained in this Monte Carlo state.
+
+        The use-case for this is when you create a copy of a state (for example by
+        loading it from disk), but you want the copy to generate samples that are
+        not correlated to the ones of the original state.
+
+        Beware that for this to work correctly, you probably need to resample a bunch
+        of times in order to decorrelate the chains, because this method only changes
+        the rng seed, but not the current configurations in the chain.
+
+        Args:
+            seed: The seed to use. If None, a random seed is drawn.
+        """
+        seed = nkjax.PRNGKey(seed)
+        self._sampler_seed = seed
+        self.sampler_state = self.sampler_state.replace(rng=seed)
+        self.reset()
+
+    def save(self, path):  # noqa: F811
+        _save({"state": self}, path)
 
     @classmethod
     def load(cls, path, new_seed: bool | int = True):
@@ -623,47 +605,79 @@ class FoundationalQuantumState(VariationalState):
             vstate.replace_sampler_seed(new_seed)
         return vstate
 
-    def qfi(self, parameters: jax.Array | None = None, seed=None):
+    def is_state(
+        self,
+        target_parameters: jax.Array,
+        *,
+        reference=None,
+        chunk_size: int | None = None,
+    ):
         """
-        Compute the Quantum Fisher Information (fidelity susceptibility) matrix
-        for the foundational state.
+        Create an :class:`~netket_foundation.expectation_value.ISState`
+        targeting ``target_parameters``.
 
-        The QFI is defined as:
-            χ_ij = <∂_i(logψ) ∂_j(logψ)> - <∂_i(logψ)><∂_j(logψ)>
-        where ∂_i denotes the derivative with respect to the i-th foundational parameter.
+        By default the current physical samples are used as the IS reference,
+        with log-probabilities computed from the joint samples (which carry
+        each replica's foundational parameters), so IS weights correctly
+        account for the per-replica distribution.
+
+        Alternatively, pass ``reference`` to use a precomputed reference
+        distribution — either a path to a ``.npz`` file written by
+        :meth:`~netket_foundation.expectation_value.SamplesWithProb.save`, a
+        :class:`~netket_foundation.expectation_value.SamplesWithProb`, or a raw
+        ``(samples, log_probs)`` tuple.
 
         Args:
-            parameters: Foundational parameters. Can be:
-                - shape (n_params,) for a single parameter set
-                - shape (N, n_params) for N parameter sets
-            seed: Optional random seed for sampling.
+            target_parameters: 1-D array of foundational parameters for the
+                               target state.
+            reference:         Optional IS reference: a ``.npz`` path, a
+                               :class:`SamplesWithProb`, or a
+                               ``(samples, log_probs)`` tuple. Defaults to the
+                               current physical samples.
+            chunk_size:        Forwarded to ISState; defaults to self.chunk_size.
 
         Returns:
-            - If parameters has shape (n_params,): A dictionary with keys
-              "Mean" and "Variance" containing the QFI matrix and its variance.
-            - If parameters has shape (N, n_params): A list of N dictionaries,
-              each with keys "Mean" and "Variance".
+            ISState ready for .expect().
         """
-        parameters = jnp.asarray(parameters)
+        from netket_foundation._src.expectation_value.is_state import ISState
+        from netket_foundation._src.expectation_value.samples_with_probability import (
+            SamplesWithProb,
+        )
+        from netket_foundation._src.vqs.io import samples_with_probability
 
-        # Handle single parameter set (1D array)
-        if parameters.ndim == 1:
-            vstate = self.get_state(parameters, seed=seed)
-            return susceptibility(vstate)
+        # Resolve the reference into (physical samples, log_probs).
+        if reference is None:
+            # Default: the current physical samples. samples_with_probability
+            # strips the parameter columns and evaluates log-probs on the joint
+            # samples (so each row uses its own replica parameters).
+            reference = samples_with_probability(self)
+        elif isinstance(reference, str | os.PathLike):
+            reference = SamplesWithProb.load(reference)
 
-        # Handle multiple parameter sets (2D array)
-        elif parameters.ndim == 2:
-            results = []
-            for i in range(parameters.shape[0]):
-                vstate = self.get_state(parameters[i], seed=seed)
-                results.append(susceptibility(vstate))
-            return results
-
+        if isinstance(reference, SamplesWithProb):
+            samples = reference.samples
+            log_probs_ref = reference.log_probs
         else:
-            raise ValueError(
-                f"parameters must be 1D (n_params,) or 2D (N, n_params), "
-                f"got shape {parameters.shape}"
-            )
+            # Raw (samples, log_probs) tuple.
+            samples, log_probs_ref = reference
+
+        # Target apply_fn: FoundationalInstance (physical) model at target_parameters
+        model_instance = FoundationalInstance(self.parameter_space, self._model)
+        target_apply_fn = wrap_to_support_scalar(
+            nkjax.HashablePartial(lambda m, p, x: m.apply(p, x), model_instance)
+        )
+        target_vars = {
+            "foundational": {"parameters": jnp.asarray(target_parameters)},
+            "params": self.parameters,
+        }
+
+        return ISState(
+            samples,
+            log_probs_ref,
+            target_apply_fn,
+            target_vars,
+            chunk_size=chunk_size or self.chunk_size,
+        )
 
 
 @jax.jit
@@ -751,6 +765,36 @@ def foundational_kernel_jax_chunked(
     return jnp.sum(mel * jnp.exp(logpsi_σp - jnp.expand_dims(logpsi_σ, -1)), axis=-1)
 
 
+@nk_local_estimators.dispatch
+def _foundational_local_estimators(
+    vstate: FoundationalQuantumState,
+    op: ParametrizedOperator,
+    chunk_size: int | None,
+) -> LocalEstimators:
+    σ, extra_args = get_local_kernel_arguments(vstate, op)
+    shape = σ.shape
+    if jnp.ndim(σ) != 2:
+        σ = σ.reshape((-1, shape[-1]))
+
+    if chunk_size is None:
+        data = jax.jit(foundational_kernel_jax, static_argnames=("logpsi",))(
+            vstate._apply_fun, vstate.variables, σ, extra_args
+        )
+    else:
+        data = jax.jit(
+            foundational_kernel_jax_chunked,
+            static_argnames=("logpsi", "chunk_size"),
+        )(
+            vstate._apply_fun,
+            vstate.variables,
+            σ,
+            extra_args,
+            chunk_size=chunk_size,
+        )
+
+    return LocalEstimators(data.reshape(shape[:-1]))
+
+
 @dispatch.dispatch
 def expect(  # noqa: F811
     vstate: FoundationalQuantumState,
@@ -801,3 +845,6 @@ def _expect(
 
 
 from netket_foundation._src.vqs import serialize as serialize  # noqa: E402
+from netket_foundation._src.vqs import (  # noqa: E402  (registers SamplesWithProb)
+    io as io,
+)

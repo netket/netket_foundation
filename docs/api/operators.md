@@ -5,8 +5,9 @@ Reference documentation for all operator classes and factory functions in `netke
 ## Operator classes
 
 The classes below are operators that specifically work with NetKet foundation. 
-The {class}`netket_foundation.operator.ParametrizedOperator` is the general operator used with foundation quantum states, while {class}`~netket_foundation.operator.PauliStringsJax` is largely equivalent to its NetKet counterpart but has a few minor modifications necessary to build those operators within jit contexts. 
+The {class}`netket_foundation.operator.ParametrizedOperator` is the general operator used with foundation quantum states, while {class}`~netket_foundation.operator.PauliStringsJax` and {class}`~netket_foundation.operator.FermionOperator2ndJax` are largely equivalent to their NetKet counterparts but have a few minor modifications necessary to build those operators within jit contexts. 
 We will, over time, upstream those changes to NetKet.
+The {class}`~netket_foundation.operator.EmbedOperator` embeds an operator acting on a subspace into a larger tensor-product Hilbert space.
 
 ```{eval-rst}
 .. autosummary::
@@ -16,6 +17,8 @@ We will, over time, upstream those changes to NetKet.
    netket_foundation.operator.ParametrizedOperator
    netket_foundation.operator.PauliStringsJax
    netket_foundation.operator.FermionOperator2nd
+   netket_foundation.operator.FermionOperator2ndJax
+   netket_foundation.operator.EmbedOperator
 ```
 
 ## Operator factories
