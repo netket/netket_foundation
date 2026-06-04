@@ -136,8 +136,8 @@ def test_onthefly_vs_dense_ntk(complex, momentum):
     )
 
     if jax.process_index() == 0:
-        e_otf = log_otf.data["AvgEnergyReplicas"]["Mean"]
-        e_dense = log_dense.data["AvgEnergyReplicas"]["Mean"]
+        e_otf = log_otf.data["Mean Energy"]["Mean"]
+        e_dense = log_dense.data["Mean Energy"]["Mean"]
         np.testing.assert_allclose(e_otf, e_dense, rtol=1e-6, atol=1e-8)
 
 
