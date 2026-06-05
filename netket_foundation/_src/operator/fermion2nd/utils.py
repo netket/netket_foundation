@@ -42,8 +42,6 @@ def _safe_isclose_zero(value, *, atol: float | None = None) -> bool:
 
 def _cast_scalar_like(value, dtype):
     if _is_tracer_like(value):
-        if jnp is None:  # fallback: keep original tracer
-            return value, False
         return jnp.asarray(value, dtype=dtype), False
 
     arr = np.array(value, dtype=dtype)
@@ -64,8 +62,6 @@ def _safe_allclose(a, b, *, atol: float) -> bool:
     try:
         res = np.isclose(a, b, atol=atol)
     except Exception:
-        if jnp is None:
-            return False
         try:
             res = jnp.isclose(a, b, atol=atol)
         except Exception:  # pragma: no cover - defensive
