@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "nqxpack>=0.1.13",
-    "pandas>=3.0.2",
+    "pandas>=2",
     "netket>=3.22",
     "matplotlib",
 ]
