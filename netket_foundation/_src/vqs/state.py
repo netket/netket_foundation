@@ -22,7 +22,7 @@ from netket.sampler import (
     rules,
     ParallelTemperingSampler,
 )
-from netket.stats import Stats, statistics, LocalEstimators
+from netket.stats import LocalEstimators
 from netket.hilbert import AbstractHilbert
 from netket.vqs import (
     VariationalState,
@@ -58,7 +58,7 @@ from netket_foundation._src.operator.parametrized import (
 from jax.sharding import NamedSharding, PartitionSpec as P
 from netket_foundation._src.hilbert.parameter_space import ParameterSpace
 from netket_foundation._src.nn.instance_wrapper import FoundationalInstance
-from netket_foundation._src.stats import ReplicaStats
+from netket_foundation._src.stats import ReplicaStats, replica_statistics
 
 
 def wrap_sampler(sampler, parameter_space, joint_space):
@@ -805,17 +805,15 @@ def expect(  # noqa: F811
     σ, args = get_local_kernel_arguments(vstate, Ô)
     local_estimator_fun = get_local_kernel(vstate, Ô)
 
-    return ReplicaStats(
-        _expect(
-            local_estimator_fun,
-            vstate._apply_fun,
-            vstate.sampler.machine_pow,
-            vstate.parameters,
-            vstate.model_state,
-            σ,
-            args,
-            n_replicas=vstate.n_replicas,
-        )
+    return _expect(
+        local_estimator_fun,
+        vstate._apply_fun,
+        vstate.sampler.machine_pow,
+        vstate.parameters,
+        vstate.model_state,
+        σ,
+        args,
+        n_replicas=vstate.n_replicas,
     )
 
 
@@ -829,7 +827,7 @@ def _expect(
     σ: jnp.ndarray,
     local_value_args: PyTree,
     n_replicas: int,
-) -> Stats:
+) -> ReplicaStats:
     n_chains = σ.shape[0]
     if σ.ndim >= 3:
         σ = jax.lax.collapse(σ, 0, 2)
@@ -842,9 +840,8 @@ def _expect(
 
     L_σ = local_value_kernel(logpsi, parameters, σ, local_value_args)
     L_σ = L_σ.reshape(n_replicas, n_chains // n_replicas, -1)
-    Ō_stats = [statistics(L_σ[i]) for i in range(n_replicas)]
 
-    return Ō_stats
+    return replica_statistics(L_σ)
 
 
 from netket_foundation._src.vqs import serialize as serialize  # noqa: E402

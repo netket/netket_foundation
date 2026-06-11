@@ -6,11 +6,11 @@ from netket.operator import AbstractOperator
 from netket.utils import timing, struct
 from netket.vqs.mc import MCState
 from netket.jax._jacobian.default_mode import JacobianMode
-from netket.stats import statistics, online_statistics
+from netket.stats import online_statistics
 
 # from netket._src.driver.abstract_optimization_driver import AbstractOptimizationDriver
 from netket.driver import VMC_SR as NetKetVMC_SR
-from netket_foundation._src.stats import combine_replica_stats
+from netket_foundation._src.stats import ReplicaStats, replica_statistics
 from netket._src.ngd.sr_srt_common import get_samples_and_pdf
 from netket_foundation._src.driver.ngd.sr_srt_common import sr, srt
 from netket_foundation._src.driver.ngd.srt_onthefly import srt_onthefly
@@ -18,8 +18,8 @@ from netket_foundation._src.driver.ngd.srt_onthefly import srt_onthefly
 
 class VMC_SR(NetKetVMC_SR):
     r"""
-    Energy minimization using Variational Monte Carlo (VMC) and Stochastic Reconfiguration
-    (SR) / Natural Gradient Descent, specialized for the foundational training scheme.
+    'Global' Energy minimization using Variational Monte Carlo (VMC) and Stochastic Reconfiguration
+    (SR) / Natural Gradient Descent.
 
     This driver tracks :class:`netket.driver.VMC_SR`, and we refer to its documentation for
     a detailed description of the method, the available formulations (standard vs.
@@ -32,8 +32,11 @@ class VMC_SR(NetKetVMC_SR):
     of Hamiltonian parameters) and they are all trained simultaneously. The Jacobian and the
     local energies carry an extra replica dimension, which is handled explicitly so that the
     natural-gradient updates are computed per replica rather than mixing samples across
-    different physical points. The progress bar and logged loss therefore report per-replica
-    energy statistics (see ``log_replica_stats``) rather than a single-state energy.
+    different physical points. 
+
+    This driver logs a loss (``Mean Energy``) which is the mean over replicas.
+    The full per-replica statistics (a :class:`~netket_foundation.stats.ReplicaStats`) are
+    additionally logged under ``Mean Energy_replicas``.
 
     For the underlying SR/NGD derivation and references, see :class:`netket.driver.VMC_SR`.
     """
@@ -41,9 +44,6 @@ class VMC_SR(NetKetVMC_SR):
     _replica_stats: Any = struct.field(pytree_node=False, serialize=False, default=None)
     _replica_online_stats: Any = struct.field(
         pytree_node=False, serialize=False, default=None
-    )
-    log_replica_stats: bool = struct.field(
-        pytree_node=False, serialize=False, default=False
     )
 
     def __init__(
@@ -60,7 +60,6 @@ class VMC_SR(NetKetVMC_SR):
         mode: JacobianMode | None = None,
         use_ntk: bool = False,
         on_the_fly: bool | None = False,
-        log_replica_stats: bool = False,
     ):
         r"""
         Initialize the driver.
@@ -107,7 +106,6 @@ class VMC_SR(NetKetVMC_SR):
             on_the_fly=on_the_fly,
         )
         self._loss_name = "Mean Energy"
-        self.log_replica_stats = log_replica_stats
 
     @property
     def update_fn(self) -> Callable:
@@ -127,9 +125,10 @@ class VMC_SR(NetKetVMC_SR):
 
     def _log_additional_data(self, log_dict):
         super()._log_additional_data(log_dict)
-        if self.log_replica_stats and self._replica_stats is not None:
-            for r, s in enumerate(self._replica_stats):
-                log_dict[f"{self._loss_name}_r{r}"] = s
+        # The aggregate (``.total``) is logged under ``_loss_name`` by the base
+        # driver; here we add the full per-replica batch under ``{loss}_replicas``.
+        if self._replica_stats is not None:
+            log_dict[f"{self._loss_name}_replicas"] = self._replica_stats
 
     @timing.timed
     def compute_loss_and_update(self):
@@ -159,17 +158,15 @@ class VMC_SR(NetKetVMC_SR):
                 )
                 for r in range(n_replicas)
             ]
-            self._replica_stats = [
-                self._replica_online_stats[r].get_stats() for r in range(n_replicas)
-            ]
+            self._replica_stats = ReplicaStats.stack(
+                [self._replica_online_stats[r].get_stats() for r in range(n_replicas)]
+            )
         else:
-            self._replica_stats = [
-                statistics(local_e_by_replica[r]) for r in range(n_replicas)
-            ]
+            self._replica_stats = replica_statistics(local_e_by_replica)
 
         # Combine per-replica Stats into a single summary (mean of replica
         # means, errors in quadrature / n, mean variance, max R_hat).
-        self._loss_stats = combine_replica_stats(self._replica_stats)
+        self._loss_stats = self._replica_stats.total
 
         diag_shift = self.diag_shift
         proj_reg = self.proj_reg

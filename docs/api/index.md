@@ -74,6 +74,22 @@ distribution, together with the corresponding result and diagnostics types.
    netket_foundation.VMC_SR
 ```
 
+## Statistics
+
+Expectation values are estimated per replica.
+{class}`~netket_foundation.stats.ReplicaStats` holds one
+{class}`netket.stats.Stats` per replica — index or iterate it like a list, or
+read the aggregate via ``.total``.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   netket_foundation.stats.ReplicaStats
+   netket_foundation.stats.replica_statistics
+```
+
 ## Operators
 
 See the {doc}`operators` page for full documentation of all operator classes and factory functions.

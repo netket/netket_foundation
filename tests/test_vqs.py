@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import netket as nk
 import netket_foundation as nkf
 from netket.stats import Stats, LocalEstimators, LocalEstimatorsBatch
+from netket_foundation.stats import ReplicaStats
 from netket_foundation._src.jax import foundational_log_jacobian
 from netket_foundation._src.vqs.fidelity_susceptibility import _combine
 from helpers import (
@@ -90,10 +91,11 @@ def test_samples_shape(vstate, hi, ps):
 
 
 def test_expect_parametrized_operator(vstate, ham):
-    """expect on a ParametrizedOperator returns a list of Stats, one per replica."""
+    """expect on a ParametrizedOperator returns per-replica Stats (one per replica)."""
     result = vstate.expect(ham)
-    assert isinstance(result, list)
+    assert isinstance(result, ReplicaStats)
     assert len(result) == vstate.n_replicas
+    assert result.shape == (vstate.n_replicas,)
     for stats in result:
         assert isinstance(stats, Stats)
         assert np.isfinite(float(stats.mean.real))

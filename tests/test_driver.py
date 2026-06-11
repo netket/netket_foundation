@@ -70,6 +70,28 @@ def test_variables_change_after_step(driver):
     assert not jnp.all(leaves == 0)
 
 
+def test_log_replica_stats(sampler, model, ps, ham):
+    """The log carries the scalar total under the loss name and the full
+    per-replica batch under ``{loss}_replicas``."""
+    vs = make_vstate(sampler, model, ps, seed=7)
+    driver = nkf.VMC_SR(
+        ham,
+        optax.sgd(0.01),
+        variational_state=vs,
+        diag_shift=1e-3,
+    )
+    logger = nk.logging.RuntimeLog()
+    driver.run(3, out=logger)
+
+    loss = driver._loss_name
+    assert loss in logger.data
+    assert f"{loss}_replicas" in logger.data
+    # the total is a scalar series; the replica batch is (n_iters, n_replicas)
+    assert np.ndim(logger.data[loss]["Mean"]) == 1
+    replicas = logger.data[f"{loss}_replicas"]["Mean"]
+    assert np.asarray(replicas).shape[-1] == vs.n_replicas
+
+
 # --------------------------------------------------------------------------- #
 # Parity tests: on_the_fly=True vs on_the_fly=False (and dense NTK vs SR).
 #
