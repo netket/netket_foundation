@@ -19,19 +19,26 @@ def combine_replica_stats(stats: Sequence[Stats]) -> Stats:
     - ``error_of_mean``: quadrature sum of the replica errors divided by the
       number of replicas (standard error of the grand mean),
     - ``variance``: average of the replica variances,
+    - ``tau_corr``: average of the replica autocorrelation times,
     - ``R_hat``: maximum across replicas (the most conservative convergence
-      indicator).
+      indicator),
+    - ``tau_corr_max``: maximum across replicas (the most conservative
+      autocorrelation-time estimate).
     """
     n = len(stats)
     means = jnp.array([s.mean for s in stats])
     errors = jnp.array([s.error_of_mean for s in stats])
     variances = jnp.array([s.variance for s in stats])
+    tau_corrs = jnp.array([s.tau_corr for s in stats])
     rhats = jnp.array([s.R_hat for s in stats])
+    tau_corr_maxs = jnp.array([s.tau_corr_max for s in stats])
     return Stats(
         mean=jnp.mean(means),
         error_of_mean=jnp.sqrt(jnp.nansum(errors**2)) / n,
         variance=jnp.nansum(variances) / n,
+        tau_corr=jnp.nanmean(tau_corrs),
         R_hat=jnp.nanmax(rhats),
+        tau_corr_max=jnp.nanmax(tau_corr_maxs),
     )
 
 
