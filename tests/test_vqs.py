@@ -239,3 +239,33 @@ def test_n_chains_not_divisible_by_n_replicas_raises():
     sampler = nk.sampler.MetropolisLocal(hi, n_chains=4)
     with pytest.raises(ValueError, match="n_replicas"):
         nkf.FoundationalQuantumState(sampler, model, ps, n_replicas=3)
+
+
+def test_freeze_unfreeze_parameters(vstate):
+    """nk.vqs.freeze_parameters preserves the concrete FoundationalQuantumState
+    type (via _replace_model) and its pinned per-replica parameters, excludes the
+    frozen parameters from the trainable set, and leaves the wavefunction value
+    unchanged; unfreeze_parameters restores it."""
+    from flax import traverse_util
+
+    # Freeze every leaf sharing the first leaf's name (some, not all, params).
+    flat = traverse_util.flatten_dict(dict(vstate.parameters))
+    target = list(flat.keys())[0][-1]
+    is_frozen = lambda path, leaf: path[-1] == target  # noqa: E731
+
+    n0 = vstate.n_parameters
+    parr0 = np.asarray(vstate.parameter_array)
+    s = np.asarray(vstate.samples).reshape(-1, vstate.hilbert.size)[:4]
+    lv0 = np.asarray(vstate.log_value(s))
+
+    frozen = nk.vqs.freeze_parameters(vstate, is_frozen)
+    assert type(frozen) is type(vstate)
+    assert 0 < frozen.n_parameters < n0
+    assert frozen.n_replicas == vstate.n_replicas
+    np.testing.assert_allclose(np.asarray(frozen.parameter_array), parr0)
+    np.testing.assert_allclose(np.asarray(frozen.log_value(s)), lv0, atol=1e-6)
+
+    restored = nk.vqs.unfreeze_parameters(frozen)
+    assert type(restored) is type(vstate)
+    assert restored.n_parameters == n0
+    np.testing.assert_allclose(np.asarray(restored.log_value(s)), lv0, atol=1e-6)

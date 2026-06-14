@@ -130,10 +130,8 @@ class FoundationalQuantumState(VariationalState):
         n_discard_per_chain: int | None = None,
         chunk_size: int | None = None,
         n_replicas: int | None = None,
+        variables: Any = None,
     ):
-        ###
-        variables = None
-        ###
         self.mutable = False
         self.training_kwargs = fcore.freeze({})
         ###
@@ -214,6 +212,42 @@ class FoundationalQuantumState(VariationalState):
         self.parameter_array = self._parameter_array
 
         self.chunk_size = chunk_size
+
+    def _replace_model(self, model=None, *, apply_fun=None, variables=None):
+        """Rebuild this state with a different model, preserving its concrete type.
+
+        Overrides :meth:`netket.vqs.VariationalState._replace_model` (used by
+        :func:`netket.vqs.freeze_parameters` / ``unfreeze_parameters``). The
+        constructor takes the *physical* sampler + parameter space (not the base
+        ``MCState`` arg set), and re-derives the pinned ``parameter_array`` from a
+        fresh sampler state — so we rebuild via the constructor (the single
+        source of truth for model wiring) and then restore the runtime state it
+        re-initialises: the sampler state, its previous value, the pinned
+        per-replica parameters, and any cached samples. ``model`` must be a
+        module (NNX models carry their parameters; Linen models supply them via
+        ``variables``); a plain ``apply_fun`` is not supported.
+        """
+        if apply_fun is not None:
+            raise NotImplementedError(
+                "FoundationalQuantumState._replace_model expects a module model, "
+                "not a plain apply_fun."
+            )
+        new = type(self)(
+            self._physical_sampler,
+            model,
+            self.parameter_space,
+            n_samples=self.n_samples,
+            n_discard_per_chain=self.n_discard_per_chain,
+            chunk_size=self.chunk_size,
+            n_replicas=self._n_replicas,
+            variables=variables,
+        )
+        new.sampler_state = self.sampler_state
+        new._sampler_state_previous = self._sampler_state_previous
+        new._parameter_array = self._parameter_array
+        if self._samples is not None:
+            new._samples = self._samples
+        return new
 
     @property
     def hilbert_physical(self) -> AbstractHilbert:
