@@ -548,10 +548,17 @@ class FoundationalQuantumState(VariationalState):
 
         model_instance = FoundationalInstance(self.parameter_space, self._model)
 
+        # Carry over any additional model-state collections (e.g. non-trainable
+        # "extra"/"noparams" variables holding fixed parameters). The
+        # "foundational" collection is excluded so that the `parameters`
+        # argument is not clobbered by the state's own stored parameters.
+        extra_model_state = {
+            k: v for k, v in self.model_state.items() if k != "foundational"
+        }
         variables = {
             "foundational": {"parameters": jnp.asarray(parameters)},
             "params": self.parameters,
-            **self.model_state    
+            **extra_model_state,
         }
 
         if seed is None:
