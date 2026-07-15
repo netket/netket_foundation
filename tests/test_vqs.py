@@ -114,6 +114,67 @@ def test_get_state_returns_mcstate(vstate):
     assert sub.hilbert == vstate.hilbert_physical
 
 
+def test_get_state_uses_passed_parameters(vstate):
+    """get_state must reconstruct a state at exactly the parameters it is
+    given, so that distinct replicas map to distinct MCStates.
+
+    Guards against a future regression where model_state propagation could
+    overwrite the explicit "foundational" collection built from the argument.
+    """
+    params_a = vstate.parameter_array[1]
+    params_b = vstate.parameter_array[2]
+    assert not np.allclose(params_a, params_b)
+
+    sub_a = vstate.get_state(params_a)
+    sub_b = vstate.get_state(params_b)
+
+    np.testing.assert_allclose(sub_a.variables["foundational"]["parameters"], params_a)
+    np.testing.assert_allclose(sub_b.variables["foundational"]["parameters"], params_b)
+
+
+def test_get_state_propagates_model_state(sampler, ps):
+    """get_state must carry over non-trainable model_state collections (e.g.
+    an "extra" collection holding fixed parameters), otherwise the
+    reconstructed MCState cannot evaluate a model that reads from them.
+
+    Regression: get_state originally rebuilt the variables from only the
+    "params" collection, dropping model_state entirely.
+    """
+    import flax.linen as nn
+
+    class ModelWithExtra(nn.Module):
+        """logpsi that reads a fixed value from a separate "extra" collection."""
+
+        @nn.compact
+        def __call__(self, x):
+            w = self.param("w", nn.initializers.normal(0.01), (x.shape[-1],), x.dtype)
+            fixed = self.variable("extra", "fixed_bias", lambda: jnp.ones(()))
+            return jnp.sum(x * w, axis=-1) + fixed.value
+
+    vs = nkf.FoundationalQuantumState(
+        sampler, ModelWithExtra(), ps, n_samples=16, n_replicas=4, seed=0
+    )
+    vs.parameter_array = jnp.linspace(0.8, 1.2, vs.n_replicas).reshape(-1, ps.size)
+
+    # sanity: the model genuinely has a non-"foundational" model_state collection
+    assert "extra" in vs.model_state
+
+    sub = vs.get_state(vs.parameter_array[0])
+
+    # the "extra" collection must survive into the reconstructed state ...
+    assert "extra" in sub.variables
+    np.testing.assert_allclose(
+        sub.variables["extra"]["fixed_bias"], vs.model_state["extra"]["fixed_bias"]
+    )
+    # ... the passed parameters must still be respected ...
+    np.testing.assert_allclose(
+        sub.variables["foundational"]["parameters"], vs.parameter_array[0]
+    )
+    # ... and the reconstructed state must be evaluable (this is what crashed).
+    sub.sample()
+    assert np.all(np.isfinite(np.asarray(sub.samples)))
+
+
 def test_is_state_expect_parametrized_operator(vstate, ham, create_ising):
     """ISState evaluates ParametrizedOperator at the target parameters."""
     ref_params = vstate.parameter_array[0]
