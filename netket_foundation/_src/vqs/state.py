@@ -130,10 +130,8 @@ class FoundationalQuantumState(VariationalState):
         n_discard_per_chain: int | None = None,
         chunk_size: int | None = None,
         n_replicas: int | None = None,
+        variables: PyTree | None = None,
     ):
-        ###
-        variables = None
-        ###
         self.mutable = False
         self.training_kwargs = fcore.freeze({})
         ###
@@ -214,6 +212,38 @@ class FoundationalQuantumState(VariationalState):
         self.parameter_array = self._parameter_array
 
         self.chunk_size = chunk_size
+
+    def _replace_model(self, model=None, *, apply_fun=None, variables=None):
+        """Rebuild this state with a different model, preserving runtime state.
+
+        Overrides :meth:`netket.vqs.VariationalState._replace_model` so that
+        :func:`~netket.nn.freeze_parameters` / ``unfreeze_parameters`` (and any
+        other model-swapping utility) work on a foundational state: the base
+        constructor takes the *physical* sampler and the parameter space rather
+        than a plain ``apply_fun``, so it cannot be reconstructed generically.
+        Foundation models are always modules.
+        """
+        if apply_fun is not None:
+            raise NotImplementedError(
+                "FoundationalQuantumState._replace_model expects a module model, "
+                "not a plain apply_fun."
+            )
+        new = type(self)(
+            sampler=self._physical_sampler,
+            model=model,
+            parameter_space=self.parameter_space,
+            n_samples=self.n_samples,
+            n_discard_per_chain=self.n_discard_per_chain,
+            chunk_size=self.chunk_size,
+            n_replicas=self._n_replicas,
+            variables=variables,
+        )
+        # Carry over runtime state the constructor re-initialises.
+        new.sampler_state = self.sampler_state
+        new._sampler_state_previous = self._sampler_state_previous
+        if self._samples is not None:
+            new._samples = self._samples
+        return new
 
     @property
     def hilbert_physical(self) -> AbstractHilbert:
