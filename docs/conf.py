@@ -65,6 +65,7 @@ def linkcode_resolve(domain, info):
     url = _linkcode_resolve(domain, info)
     return url and url.replace("github.com/NeuralQXLab/", "github.com/netket/")
 
+
 # netket_foundation uses Google-style docstrings
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False

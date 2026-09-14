@@ -300,3 +300,34 @@ def test_n_chains_not_divisible_by_n_replicas_raises():
     sampler = nk.sampler.MetropolisLocal(hi, n_chains=4)
     with pytest.raises(ValueError, match="n_replicas"):
         nkf.FoundationalQuantumState(sampler, model, ps, n_replicas=3)
+
+
+def test_freeze_parameters_preserves_foundational_state(sampler, model, ps):
+    """freeze/unfreeze keep the concrete type, value, and runtime state.
+
+    Exercises ``FoundationalQuantumState._replace_model`` — the hook NetKet's
+    framework-agnostic freeze machinery delegates to when rebuilding a state.
+    Before that hook existed, ``freeze_parameters`` raised ``TypeError`` on any
+    ``VariationalState`` that was not an ``MCState`` / ``FullSumState``.
+    """
+    vstate = make_vstate(sampler, model, ps, seed=0)
+    x = vstate.samples.reshape(-1, vstate.samples.shape[-1])
+    out_before = vstate.log_value(x)
+
+    # Freeze every parameter leaf: exercises the model swap + variables inject.
+    frozen = nk.vqs.freeze_parameters(vstate, lambda path, leaf: True)
+
+    # Concrete subclass is preserved ...
+    assert type(frozen) is nkf.FoundationalQuantumState
+    # ... all params moved out of the trainable set ...
+    assert jax.tree_util.tree_leaves(frozen.parameters) == []
+    # ... runtime state carried over ...
+    assert frozen.sampler_state is vstate.sampler_state
+    # ... and the wavefunction value is unchanged.
+    assert jnp.allclose(frozen.log_value(x), out_before)
+
+    # unfreeze restores the concrete type and the full trainable parameter set.
+    restored = nk.vqs.unfreeze_parameters(frozen)
+    assert type(restored) is nkf.FoundationalQuantumState
+    assert len(jax.tree_util.tree_leaves(restored.parameters)) > 0
+    assert jnp.allclose(restored.log_value(x), out_before)

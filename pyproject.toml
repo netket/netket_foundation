@@ -105,3 +105,8 @@ replace = 'version = "{new_version}"'
 
 [tool.uv.sources]
 neuralqxlab-sphinx-theme = { git = "https://github.com/NeuralQXLab/neuralqxlab-sphinx-theme" }
+# Track netket `main`: FoundationalQuantumState._replace_model requires
+# VariationalState._replace_model (netket/netket#2273), which is unreleased.
+# Revert to a PyPI constraint (`netket>=3.23`) once that lands in a release.
+# `[tool.uv.sources]` is dev/CI-only and is not part of the published wheel.
+netket = { git = "https://github.com/NetKet/netket", branch = "main" }
