@@ -37,7 +37,7 @@ class VMC_SR(NetKetVMC_SR):
 
     This driver logs a loss (``Mean Energy``) which is the mean over replicas.
     The full per-replica statistics (a :class:`~netket_foundation.stats.ReplicaStats`) are
-    additionally logged under ``Energies_replicas``.
+    additionally logged under ``{loss}_replicas`` (i.e. ``Mean Energy_replicas``).
 
     For the underlying SR/NGD derivation and references, see :class:`netket.driver.VMC_SR`.
     """
@@ -125,7 +125,7 @@ class VMC_SR(NetKetVMC_SR):
         # The aggregate (``.total``) is logged under ``_loss_name`` by the base
         # driver; here we add the full per-replica batch under ``{loss}_replicas``.
         if self._replica_stats is not None:
-            log_dict["Energies_replicas"] = self._replica_stats
+            log_dict[f"{self._loss_name}_replicas"] = self._replica_stats
 
     @timing.timed
     def compute_loss_and_update(self):
