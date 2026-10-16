@@ -211,6 +211,36 @@ def test_onthefly_chunked_vs_dense(complex):
     )
 
 
+def test_onthefly_solve_keeps_float32():
+    """The diag-shifted NTK handed to the solver keeps the model's float32 dtype."""
+    from netket_foundation._src.driver.ngd.srt_onthefly import srt_onthefly
+
+    n_replicas, ns, L = 2, 4, 3
+    samples = jax.random.normal(jax.random.key(0), (n_replicas * ns, L), jnp.float32)
+    parameters = {"w": jnp.ones((L,), jnp.float32)}
+    local_energies = jnp.arange(n_replicas * ns, dtype=jnp.float32)
+
+    solver_dtypes = []
+
+    def solver_fn(A, b):
+        solver_dtypes.append(A.dtype)
+        return jnp.linalg.solve(A, b)
+
+    srt_onthefly(
+        lambda v, s: s @ v["params"]["w"],
+        local_energies,
+        parameters,
+        {},
+        samples,
+        n_replicas=n_replicas,
+        diag_shift=1e-3,
+        solver_fn=solver_fn,
+        mode="real",
+    )
+
+    assert solver_dtypes == [jnp.float32]
+
+
 # # Sharding must be enabled before JAX initialises, so run the sharded parity
 # # check in a subprocess with multiple simulated devices. n_chains=4 / n_replicas=4
 # # with 2 devices keeps whole replicas on each device (2 | 4).
